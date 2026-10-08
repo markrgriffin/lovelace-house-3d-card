@@ -1,0 +1,6 @@
+# A full-height panel view containing only the 3D house
+type: panel
+title: House
+path: house-3d
+cards:
+  - type: custom:house-3d-card

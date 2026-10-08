@@ -1,0 +1,12 @@
+# Two cards, one per floor, each with its own saved layout (storage_key)
+type: sections
+title: House
+sections:
+  - type: grid
+    cards:
+      - type: custom:house-3d-card
+        storage_key: downstairs
+        height: 60vh
+      - type: custom:house-3d-card
+        storage_key: upstairs
+        height: 60vh

@@ -1,0 +1,27 @@
+{
+  "name": "lovelace-house-3d-card",
+  "version": "1.0.0",
+  "description": "Rotatable 3D house mimic card for Home Assistant",
+  "scripts": {
+    "build": "node build.mjs"
+  },
+  "keywords": [
+    "home-assistant",
+    "lovelace",
+    "hacs",
+    "3d",
+    "three.js"
+  ],
+  "author": "Mark Griffin",
+  "license": "MIT",
+  "devDependencies": {
+    "esbuild": "^0.24.2",
+    "three": "^0.160.1"
+  },
+  "type": "module",
+  "private": true,
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/markrgriffin/lovelace-house-3d-card.git"
+  }
+}

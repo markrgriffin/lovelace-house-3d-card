@@ -8,6 +8,8 @@ A rotatable 3D mimic of your house for Home Assistant dashboards. Lights glow in
 
 ![Night view with lights on](docs/night.png)
 
+📖 **Walkthrough with screenshots and install steps:** [A Rotatable 3D House Dashboard for Home Assistant](https://thehomelabbench.com/home-assistant-3d-house-dashboard/)
+
 ## Features
 
 - **Rotate, zoom and pan** by dragging (mouse or touch, pinch to zoom, two fingers to pan). Near walls hide themselves so you can always see in.

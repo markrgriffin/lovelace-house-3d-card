@@ -94,4 +94,4 @@ npm run build      # → dist/house-3d-card.js
 
 ## Licence
 
-MIT. Bundles three.js (MIT).
+MIT — see [LICENSE](LICENSE). Bundles three.js (MIT) — see [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).

@@ -868,11 +868,11 @@ class House3DCard extends HTMLElement {
   }
   _openIO() {
     const box = this._dom.dlgBox;
-    box.innerHTML = `<b>Export / import layout (JSON)</b><div class="hint">Select all + copy to back it up. Paste a saved layout and press Import to restore.</div><textarea spellcheck="false"></textarea><div style="display:flex;gap:6px;justify-content:flex-end"><button class="btn" data-i>Import</button><button class="btn" data-x>Close</button></div>`;
+    box.innerHTML = `<b>Export / import layout (JSON)</b><div class="hint">Select all + copy to back it up. Paste a saved layout and press Import to restore.</div><textarea spellcheck="false"></textarea><label style="font-size:12px"><input type="checkbox" data-keep checked> Keep my placed entities (import rooms, doors, colours and plan image only)</label><div style="display:flex;gap:6px;justify-content:flex-end"><button class="btn" data-i>Import</button><button class="btn" data-x>Close</button></div>`;
     const ta = box.querySelector('textarea'); ta.value = JSON.stringify(this._layout);
     box.querySelector('[data-x]').addEventListener('click', () => this._dom.dlg.classList.remove('show'));
     box.querySelector('[data-i]').addEventListener('click', () => {
-      try { const v = JSON.parse(ta.value); if (!v || !Array.isArray(v.rooms)) throw new Error('no rooms[] in JSON'); this._layout = this._normalise(v); this._touch(); this._buildRooms(); this._buildMarkers(); this._syncStates(true); this._dom.dlg.classList.remove('show'); this._select(null); this._toast('Imported – press Save to keep it'); }
+      try { const v = JSON.parse(ta.value); if (!v || !Array.isArray(v.rooms)) throw new Error('no rooms[] in JSON'); const keep = box.querySelector('[data-keep]').checked && this._layout.markers.length; if (keep) v.markers = this._layout.markers; this._layout = this._normalise(v); this._touch(); this._buildRooms(); this._buildMarkers(); this._syncStates(true); this._dom.dlg.classList.remove('show'); this._select(null); this._toast('Imported – press Save to keep it'); }
       catch (e) { this._toast('Import failed: ' + e.message); }
     });
     this._dom.dlg.classList.add('show');

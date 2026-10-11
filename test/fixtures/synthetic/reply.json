@@ -14,10 +14,10 @@
      "label": "window",
      "mount": "wall",
      "bbox": [
-      167,
-      274,
-      482,
-      624
+      130,
+      215,
+      379,
+      490
      ],
      "width_m": 1.0,
      "depth_m": 0.06,
@@ -32,10 +32,10 @@
      "label": "small picture",
      "mount": "wall",
      "bbox": [
-      1159,
-      355,
-      1272,
-      451
+      911,
+      279,
+      1000,
+      355
      ],
      "width_m": 0.4,
      "depth_m": 0.03,
@@ -50,10 +50,10 @@
      "label": "wall TV",
      "mount": "wall",
      "bbox": [
-      586,
-      375,
-      933,
-      578
+      460,
+      294,
+      733,
+      454
      ],
      "width_m": 1.23,
      "depth_m": 0.06,
@@ -68,10 +68,10 @@
      "label": "walnut media console",
      "mount": "floor",
      "bbox": [
-      397,
-      690,
-      1114,
-      906
+      312,
+      542,
+      876,
+      712
      ],
      "width_m": 2.4,
      "depth_m": 0.45,
@@ -87,9 +87,9 @@
      "mount": "floor",
      "bbox": [
       0,
-      421,
-      138,
-      939
+      330,
+      108,
+      738
      ],
      "width_m": 0.45,
      "depth_m": 0.45,
@@ -104,10 +104,10 @@
      "label": "rust armchair",
      "mount": "floor",
      "bbox": [
-      1196,
-      688,
-      1568,
-      1176
+      940,
+      541,
+      1232,
+      924
      ],
      "width_m": 0.9,
      "depth_m": 0.85,
@@ -128,10 +128,10 @@
      "label": "blue chimney breast",
      "mount": "wall",
      "bbox": [
-      599,
-      223,
-      1002,
-      853
+      470,
+      175,
+      788,
+      671
      ],
      "width_m": 1.5,
      "depth_m": 0.4,
@@ -146,10 +146,10 @@
      "label": "floor lamp",
      "mount": "floor",
      "bbox": [
-      1163,
-      441,
-      1346,
-      863
+      914,
+      347,
+      1058,
+      678
      ],
      "width_m": 0.45,
      "depth_m": 0.45,
@@ -164,10 +164,10 @@
      "label": "pine fireplace",
      "mount": "floor",
      "bbox": [
-      639,
-      573,
-      970,
-      876
+      502,
+      450,
+      762,
+      689
      ],
      "width_m": 1.2,
      "depth_m": 0.25,
@@ -182,10 +182,10 @@
      "label": "arched mirror",
      "mount": "wall",
      "bbox": [
-      695,
-      319,
-      910,
-      535
+      546,
+      250,
+      715,
+      420
      ],
      "width_m": 0.8,
      "depth_m": 0.04,

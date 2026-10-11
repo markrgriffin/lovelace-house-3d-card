@@ -284,7 +284,7 @@ class House3DCard extends HTMLElement {
     l.rooms.forEach((r) => { if (!r.edgeColors || typeof r.edgeColors !== 'object') r.edgeColors = {}; });
     l.furniture = (Array.isArray(l.furniture) ? l.furniture : []).filter((f) => f && typeof f.x === 'number' && typeof f.y === 'number');
     l.furniture.forEach((f, i) => {
-      f.type = CATALOGUE[f.type] ? f.type : 'other'; const c = CATALOGUE[f.type];
+      f.type = Object.prototype.hasOwnProperty.call(CATALOGUE, f.type) ? f.type : 'other'; const c = CATALOGUE[f.type];
       f.id = f.id || 'f_' + i + '_' + Date.now().toString(36); f.label = f.label || c.label;
       ['w', 'd', 'h'].forEach((k) => { if (!(f[k] > 0)) f[k] = c[k]; }); f.elev = f.elev > 0 ? f.elev : (c.place === 'wall' && f.elev == null ? c.elev || 0 : 0);
       f.rot = typeof f.rot === 'number' ? f.rot : 0; f.colour = f.colour || c.colour; f.mount = f.mount === 'wall' || f.mount === 'floor' ? f.mount : (c.place === 'wall' ? 'wall' : 'floor');
@@ -396,7 +396,7 @@ class House3DCard extends HTMLElement {
     const T = THREE, mk = () => Array.from({ length: MAXL }, () => new T.Vector3());
     return { nL: { value: 0 }, lPos: { value: mk() }, lCol: { value: mk() }, lRad: { value: new Array(MAXL).fill(1) } };
   }
-  _buildRooms() {
+  _buildRooms(skipFurn) {
     const T = THREE, L = this._layout, H = L.wallHeight;
     this._gRooms.traverse((o) => { if (o.geometry) o.geometry.dispose(); if (o.material && o.material.dispose) o.material.dispose(); });
     this._gRooms.clear(); this._rooms.clear();
@@ -449,7 +449,8 @@ class House3DCard extends HTMLElement {
       this._gRooms.add(floor, wall);
       this._rooms.set(room.id, { room, floor, wall, lights });
     });
-    this._buildFurniture(); this._applySelection(); this._buildHandles(); this._buildPlanImage();
+    if (skipFurn) this._furnStale = true; else { this._furnStale = false; this._buildFurniture(); }
+    this._applySelection(); this._buildHandles(); this._buildPlanImage();
   }
   _buildPlanImage() {
     const T = THREE, p = this._layout.plan;
@@ -469,7 +470,7 @@ class House3DCard extends HTMLElement {
   _roomAt(x, y) { const r = this._layout.rooms.find((rr) => pointInPoly(x, y, rr.poly)); return r ? r.id : null; }
 
   /* ----- furniture ----- */
-  _isAdmin() { return !!(this._hass && (!this._hass.user || this._hass.user.is_admin)); }
+  _isAdmin() { return !!(this._hass && this._hass.user && this._hass.user.is_admin); } // fail closed
   _furnLights(f) { const ro = this._rooms.get(this._roomAt(f.x, f.y) || f.room); return ro ? ro.lights : this._ground.lights; }
   _makeFurn(f) {
     const L = this._layout, lights = this._furnLights(f);
@@ -481,7 +482,7 @@ class House3DCard extends HTMLElement {
   _buildFurniture() {
     if (!this._gFurn || !this._layout) return;
     (this._furn ? Array.from(this._furn.keys()) : []).forEach((id) => this._dropFurn(id));
-    this._furn = new Map(); (this._layout.furniture || []).forEach((f) => this._makeFurn(f));
+    this._furn = new Map(); this._furnStale = false; (this._layout.furniture || []).forEach((f) => this._makeFurn(f));
     this._updateLampGlow(); this._applySelection();
   }
   _rebuildFurn(f) { this._dropFurn(f.id); this._makeFurn(f); this._updateLampGlow(); this._applySelection(); this._render(); }
@@ -619,7 +620,8 @@ class House3DCard extends HTMLElement {
     if (!this._ready) return; let changed = force, lights = force;
     this._markers.forEach((m) => { if (this._updateMarker(m, force)) { changed = true; if (m.data.kind === 'light') lights = true; } });
     const sun = this._hass.states['sun.sun']; if (force || sun !== this._sunState) { this._sunState = sun; this._updateAmbient(); changed = true; }
-    if (lights) { this._updateLighting(); this._updateLampGlow(); }
+    if (lights) this._updateLighting();
+    if (this._furn && this._furn.size) { let lamp = force || lights; this._furn.forEach((o) => { const e = o.data.entity; if (!e) return; const st = this._hass.states[e]; if (st !== o.state) { o.state = st; lamp = true; } }); if (lamp) { this._updateLampGlow(); changed = true; } }
     if (this._climateOpen) this._renderClimate();
     if (changed) this._render();
   }
@@ -637,7 +639,7 @@ class House3DCard extends HTMLElement {
       if (this._edit) {
         if (this._shape) { const h = this._pick(e, this._gHandles.children); if (h) this._drag = { type: h.object.userData.type, ref: h.object.userData }; }
         if (!this._drag) { const id = this._pickMarker(e); if (id) this._drag = { type: 'marker', id }; }
-        if (!this._drag && !this._drawing) { const fid = this._pickFurn(e), o = fid && this._furn.get(fid); if (o) { const pt = this._planePoint(e, 0); if (pt) this._drag = { type: 'furn', id: fid, off: [o.data.x - pt.x, o.data.y - pt.z] }; } }
+        if (!this._drag && !this._drawing && this._sel && this._sel.type === 'furn') { const fid = this._pickFurn(e), o = fid === this._sel.id && this._furn.get(fid); if (o) { const pt = this._planePoint(e, 0); if (pt) this._drag = { type: 'furn', id: fid, off: [o.data.x - pt.x, o.data.y - pt.z] }; } }
       }
       clearTimeout(this._longT);
       this._longT = setTimeout(() => { if (!this._moved && this._pointers.size === 1 && !this._edit) { const id = this._pickMarker(e); if (id) { this._long = true; this._moreInfo(id); } } }, 600);
@@ -665,6 +667,7 @@ class House3DCard extends HTMLElement {
   }
   _onUp(e, cancelled) {
     const had = this._pointers.size; this._pointers.delete(e.pointerId); clearTimeout(this._longT); this._pinch = null;
+    if (this._furnStale && !this._pointers.size) { this._buildFurniture(); this._render(); }
     if (had === 1 && !cancelled) {
       if (this._drag && this._moved) {
         if (this._drag.type === 'marker') { const m = this._markers.get(this._drag.id); if (m) { this._poseMarker(m); this._updateLighting(); } }
@@ -691,7 +694,7 @@ class House3DCard extends HTMLElement {
       const pt = this._planePoint(e, dr.type === 'vtx' ? this._layout.wallHeight + 0.05 : 1.0); if (!pt) return; const nx = snap(pt.x), ny = snap(pt.z);
       if (dr.type === 'vtx') dr.ref.refs.forEach(([ri, vi]) => { this._layout.rooms[ri].poly[vi] = [nx, ny]; });
       else if (dr.type === 'door') { const d = this._layout.doors[dr.ref.index]; d.x = nx; d.y = ny; }
-      const keep = dr.ref; this._buildRooms(); // handles are rebuilt; keep dragging the same logical handle
+      const keep = dr.ref; this._buildRooms(true); // handles are rebuilt; keep dragging the same logical handle (furniture refreshed on release)
       const again = this._gHandles.children.find((hd) => hd.userData.type === keep.type && (keep.type === 'door' ? hd.userData.index === keep.index : Math.abs(hd.position.x - nx) < 1e-6 && Math.abs(hd.position.z - ny) < 1e-6));
       if (again) dr.ref = again.userData;
       this._markers.forEach((m) => (m.roomId = this._roomAt(m.data.x, m.data.y))); this._updateLighting();
@@ -731,8 +734,10 @@ class House3DCard extends HTMLElement {
     if (this._edit) {
       if (this._shape) { const h = this._pick(e, this._gHandles.children); if (h && h.object.userData.type === 'door') return this._select({ type: 'door', id: h.object.userData.index }); }
       if (id) return this._select({ type: 'marker', id });
-      const fid = this._pickFurn(e); if (fid) return this._select({ type: 'furn', id: fid });
+      const fid = this._pickFurn(e);
       const floors = []; this._rooms.forEach((r) => floors.push(r.floor)); const h = this._pick(e, floors);
+      // tapping a piece selects it; tapping it again selects the room under it (rugs and beds cover the floor)
+      if (fid && !(this._sel && this._sel.type === 'furn' && this._sel.id === fid)) return this._select({ type: 'furn', id: fid });
       return this._select(h ? { type: 'room', id: h.object.userData.room } : null);
     }
     if (!id) {

@@ -44,7 +44,7 @@ with sync_playwright() as p:
         page.wait_for_function(f'card._fx.shots.length >= {truth["photos"].index(ph) + 1}')
     shot(page, '1-photos')
     sizes = page.evaluate('card._fx.shots.map(s => [s.w, s.h, s.blob.type])')
-    check(all(s == [1568, 1176, 'image/jpeg'] for s in sizes), f'photos re-encoded as 1568 px JPEG {sizes}')
+    check(all(s == [1232, 924, 'image/jpeg'] for s in sizes), f'photos re-encoded as JPEG within 1568 px / 1.15 MP {sizes}')
     page.click('house-3d-card [data-go]')
     page.wait_for_selector('house-3d-card .status.ok', timeout=15000)
     calls = page.evaluate('calls')
@@ -55,7 +55,7 @@ with sync_playwright() as p:
     check([c['name'] for c in up] == ['house3d_living_north1.jpg', 'house3d_living_west1.jpg'], f'upload names {[c["name"] for c in up]}')
     aic = calls[ai[0]]['data']
     check(aic['entity_id'] == 'ai_task.claude_ai_task' and [a['media_content_id'] for a in aic['attachments']] == ['media-source://media_source/local/house3d_living_north1.jpg', 'media-source://media_source/local/house3d_living_west1.jpg'], 'AI call has entity and both attachments')
-    check('Photo 1 faces the NORTH wall (5.5 m long) and is 1568 x 1176 pixels' in aic['instructions'], 'prompt states wall and pixel size')
+    check('Photo 1 faces the NORTH wall (5.5 m long) and is 1232 x 924 pixels' in aic['instructions'], 'prompt states wall and pixel size')
     # corners: drag one handle with the mouse, then set the true corners
     h = page.locator('house-3d-card [data-h=fl] circle').first.bounding_box()
     before = page.evaluate('card._fx.shots[0].corners.fl')

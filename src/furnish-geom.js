@@ -55,8 +55,8 @@ const SYNONYMS = {
 };
 export function normType(t) {
   const k = String(t || '').toLowerCase().trim().replace(/[\s-]+/g, '_');
-  if (CATALOGUE[k]) return k;
-  if (SYNONYMS[k]) return SYNONYMS[k];
+  if (Object.prototype.hasOwnProperty.call(CATALOGUE, k)) return k;
+  if (Object.prototype.hasOwnProperty.call(SYNONYMS, k)) return SYNONYMS[k];
   return 'other';
 }
 export const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
@@ -336,13 +336,24 @@ export function mergeShots(shots, room, idPrefix = 'f') {
   const groups = new Map(); let n = 0;
   shots.forEach((s, si) => s.items.filter((it) => it.keep).forEach((it) => {
     const p = s.placements.get(it.key); if (!p) return;
-    const key = it.link ? 'L:' + it.link : 'K:' + si + ':' + it.key;
+    const key = it.link ? 'L:' + it.link + ':' + it.type : 'K:' + si + ':' + it.key;
     if (!groups.has(key)) groups.set(key, []);
     const [x, y] = wallToPlan(s.fr, p.u, p.dist);
     groups.get(key).push({ it, p, x, y, si, fr: s.fr });
   }));
-  const out = [];
+  // a shared object_id only merges observations from different photos that land near each other (models reuse ids)
+  const clusters = [];
   groups.forEach((obs) => {
+    const local = [];
+    obs.forEach((o) => {
+      const dm = clampDims(o.it.type, o.it.w_m, o.it.d_m, o.it.h_m), reach = Math.max(1.2, 0.6 * (dm.w + dm.d)); // big things seen partly can be far off
+      const c = local.find((cl) => !cl.some((q) => q.si === o.si) && Math.hypot(cl.reduce((a, q) => a + q.x, 0) / cl.length - o.x, cl.reduce((a, q) => a + q.y, 0) / cl.length - o.y) < reach);
+      if (c) c.push(o); else local.push([o]);
+    });
+    clusters.push(...local);
+  });
+  const out = [];
+  clusters.forEach((obs) => {
     const strong = obs.filter((o) => o.p.weight >= 2), use = strong.length ? strong : obs;
     const W = use.reduce((s, o) => s + o.p.weight, 0);
     let x = use.reduce((s, o) => s + o.x * o.p.weight, 0) / W, y = use.reduce((s, o) => s + o.y * o.p.weight, 0) / W;
@@ -353,11 +364,20 @@ export function mergeShots(shots, room, idPrefix = 'f') {
     out.push({
       id: idPrefix + '_' + Date.now().toString(36) + '_' + (n++).toString(36), room: room.id, type: it.type, label: it.label,
       x, y, w: round(clamp(p.w, 0.05, 8)), d: round(it.type === 'rug' ? dm.d : p.d), h: round(p.h), elev: round(p.elev), rot: Math.round(p.rot),
-      colour: it.colour || cat.colour, mount: p.mount, source: 'photo', _against: p.against, _wall: best.fr.index, _dist: p.dist,
+      colour: it.colour || cat.colour, mount: p.mount, source: 'photo', _against: p.against || p.mount === 'wall', _wall: best.fr.index, _fr: best.fr, _dist: p.dist,
     });
   });
   separate(out);
-  out.forEach((f) => { const q = keepInside(f.x, f.y, room.poly, Math.min(0.2, f.d / 2)); f.x = round(q[0]); f.y = round(q[1]); delete f._against; delete f._wall; delete f._dist; });
+  out.forEach((f) => {
+    // against-wall items were placed in wall coordinates (u clamped to the wall, dist >= d/2); a polygon test on the
+    // wall line itself is ambiguous, so only free-standing items are pulled inside
+    if (!f._against) { const q = keepInside(f.x, f.y, room.poly, Math.max(0.01, Math.min(0.2, f.d / 2) - 0.01)); f.x = q[0]; f.y = q[1]; }
+    else { // clamp along its own wall (separation or averaging may have pushed it past the end)
+      const fr = f._fr, u = (f.x - fr.origin[0]) * fr.right[0] + (f.y - fr.origin[1]) * fr.right[1], dist = (f.x - fr.origin[0]) * fr.normal[0] + (f.y - fr.origin[1]) * fr.normal[1];
+      const q = wallToPlan(fr, clamp(u, Math.min(f.w / 2, fr.len / 2), Math.max(fr.len - f.w / 2, fr.len / 2)), Math.max(f.d / 2, dist)); f.x = q[0]; f.y = q[1];
+    }
+    f.x = round(f.x); f.y = round(f.y); delete f._against; delete f._wall; delete f._fr; delete f._dist;
+  });
   return out;
 }
 const round = (v) => Math.round(v * 100) / 100;

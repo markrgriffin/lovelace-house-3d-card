@@ -5,7 +5,7 @@ import {
   restoreLightCall, clamp,
 } from './furnish-geom.js';
 
-const MAX_PHOTOS = 6, LONG_EDGE = 1568, MARGIN = 0.18;
+const MAX_PHOTOS = 6, LONG_EDGE = 1568, MAX_PIXELS = 1150000, MARGIN = 0.18;
 const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const SVGNS = 'http://www.w3.org/2000/svg';
 const HANDLES = [['cl', 'Ceiling left'], ['cr', 'Ceiling right'], ['fr', 'Floor right'], ['fl', 'Floor left']];
@@ -43,6 +43,7 @@ export const FURNISH_STYLE = `
 .fx .sws{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.fx .sws input[type=color]{width:46px;height:28px;border:none;background:none;padding:0}
 .fx .pick{cursor:crosshair}.fx .row{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;align-items:center}.fx h4{font-size:12px;opacity:.7;text-transform:uppercase;letter-spacing:.04em}
 .fx label.btn{display:inline-block}
+@media (max-width:600px){.fx .steps{display:none}.fx .bd{padding:8px}}
 `;
 
 /* ---------- image helpers ---------- */
@@ -52,10 +53,11 @@ async function decode(file) {
   try { return await new Promise((res, rej) => { const im = new Image(); im.onload = () => res(im); im.onerror = () => rej(new Error('cannot decode')); im.src = url; }); }
   finally { setTimeout(() => URL.revokeObjectURL(url), 1000); }
 }
-// re-encode as a real JPEG, long edge <= 1568 px (the size the model works at, so its pixel answers line up)
+// re-encode as a real JPEG, long edge <= 1568 px and <= ~1.15 megapixels – the size vision models work at without
+// resizing again, so their pixel answers line up with ours
 export async function prepPhoto(file) {
   let img; try { img = await decode(file); } catch (e) { throw new Error(`Couldn't read ${file.name || 'that photo'} – use a JPEG, PNG or WebP image`); }
-  const sw = img.width, sh = img.height, k = Math.min(1, LONG_EDGE / Math.max(sw, sh)), w = Math.round(sw * k), h = Math.round(sh * k);
+  const sw = img.width, sh = img.height, k = Math.min(1, LONG_EDGE / Math.max(sw, sh), Math.sqrt(MAX_PIXELS / (sw * sh))), w = Math.floor(sw * k), h = Math.floor(sh * k);
   const cv = document.createElement('canvas'); cv.width = w; cv.height = h; const g = cv.getContext('2d'); g.drawImage(img, 0, 0, w, h);
   if (img.close) img.close();
   const blob = await new Promise((res) => cv.toBlob(res, 'image/jpeg', 0.85));
@@ -88,16 +90,20 @@ export const FurnishMixin = {
     this._fx = null; if (this._dom && this._dom.fx) { this._dom.fx.classList.remove('show'); this._dom.fx.innerHTML = ''; }
   },
   _fxRoom() { return this._layout.rooms.find((r) => r.id === this._fx.roomId); },
+  // photos changed: forget results and make any AI run still in flight stale
+  _fxReset() { const fx = this._fx; fx.run = (fx.run || 0) + 1; fx.ai = { status: 'idle' }; fx.shots.forEach((s) => { s.items = []; s.wallColour = null; }); fx.floor = null; },
 
   /* ----- photo mode: room lights to neutral white while photographing ----- */
   _fxRoomLights() { const out = []; this._markers.forEach((m) => { if (m.data.kind === 'light' && (m.roomId || this._roomAt(m.data.x, m.data.y)) === this._fx.roomId) out.push(m.data.entity); }); return out; },
   async _fxPhotoMode(on) {
     const fx = this._fx; if (!fx) return;
     if (on && !fx.saved) {
-      fx.saved = {}; const ents = this._fxRoomLights();
+      const ents = this._fxRoomLights(), saved = {};
+      ents.forEach((e) => { const s = this._hass.states[e]; saved[e] = s ? JSON.parse(JSON.stringify(s)) : null; }); // record everything first
+      fx.saved = saved;
       for (const e of ents) {
-        const s = this._hass.states[e]; fx.saved[e] = s ? JSON.parse(JSON.stringify(s)) : null;
-        const modes = (s && s.attributes && s.attributes.supported_color_modes) || [], colour = modes.some((m) => ['color_temp', 'hs', 'rgb', 'rgbw', 'rgbww', 'xy'].includes(m));
+        if (fx.saved !== saved) break; // restored (or closed) while we were still switching lights on
+        const s = saved[e], modes = (s && s.attributes && s.attributes.supported_color_modes) || [], colour = modes.some((m) => ['color_temp', 'hs', 'rgb', 'rgbw', 'rgbww', 'xy'].includes(m));
         try { await this._hass.callService('light', 'turn_on', Object.assign({ entity_id: e, brightness_pct: 100 }, colour ? { color_temp_kelvin: 4000 } : {})); } catch (err) { /* keep going */ }
       }
       this._toast(ents.length ? `Photo mode: ${ents.length} light${ents.length > 1 ? 's' : ''} set to neutral white` : 'No lights placed in this room yet');
@@ -164,10 +170,10 @@ export const FurnishMixin = {
         catch (err) { this._toast(err.message); }
       }
       const next = edges.find((i) => !fx.shots.some((x) => x.edge === i)); if (next != null) fx.edge = next;
-      fx.ai = { status: 'idle' }; this._fxRender();
+      this._fxReset(); this._fxRender();
     });
-    bd.querySelectorAll('[data-w]').forEach((s) => s.addEventListener('change', () => { fx.shots[Number(s.dataset.w)].edge = Number(s.value); fx.shots[Number(s.dataset.w)].corners = null; fx.ai = { status: 'idle' }; this._fxRender(); }));
-    bd.querySelectorAll('[data-rm]').forEach((b) => b.addEventListener('click', () => { const s = fx.shots.splice(Number(b.dataset.rm), 1)[0]; if (s && s.url) URL.revokeObjectURL(s.url); fx.ai = { status: 'idle' }; this._fxRender(); }));
+    bd.querySelectorAll('[data-w]').forEach((s) => s.addEventListener('change', () => { fx.shots[Number(s.dataset.w)].edge = Number(s.value); fx.shots[Number(s.dataset.w)].corners = null; this._fxReset(); this._fxRender(); }));
+    bd.querySelectorAll('[data-rm]').forEach((b) => b.addEventListener('click', () => { const s = fx.shots.splice(Number(b.dataset.rm), 1)[0]; if (s && s.url) URL.revokeObjectURL(s.url); this._fxReset(); this._fxRender(); }));
     const pm = bd.querySelector('[data-pm]'); if (pm) pm.addEventListener('click', () => this._fxPhotoMode(!fx.saved));
     bd.querySelector('[data-ceil]').addEventListener('change', (e) => { const v = parseFloat(e.target.value); if (v > 1) { fx.ceiling = v; fx.shots.forEach((s) => { s.top = v; }); } });
     bd.querySelector('[data-ent]').addEventListener('change', (e) => { fx.entity = e.target.value; try { localStorage.setItem('bh3d_ai', fx.entity); } catch (err) { /* ignore */ } });
@@ -215,7 +221,7 @@ export const FurnishMixin = {
       if (this._fx !== fx || fx.run !== run) return; // superseded by a newer run
       const norm = normaliseReply(obj, fx.shots.map((s) => ({ w: s.w, h: s.h })), this._config.ai_bbox_format || 'pixels');
       fx.shots.forEach((s, i) => { s.items = norm.photos[i].items; s.wallColour = norm.photos[i].wallColour; });
-      fx.floor = norm.floor || { type: 'wood', colour: null };
+      fx.floor = norm.floor && norm.floor.colour ? norm.floor : (norm.floor ? { type: norm.floor.type, colour: null } : null);
       set({ status: 'done', count: fx.shots.reduce((n, s) => n + s.items.length, 0), rescaled: norm.rescaled.some(Boolean) });
     } catch (e) {
       const m = (e && (e.message || e.code)) || String(e);
@@ -233,7 +239,8 @@ export const FurnishMixin = {
     const mx = Math.round(shot.w * MARGIN), my = Math.round(shot.h * MARGIN);
     host.innerHTML = `<div class="stagewrap"><svg class="ph" viewBox="${-mx} ${-my} ${shot.w + 2 * mx} ${shot.h + 2 * my}" preserveAspectRatio="xMidYMid meet"><rect x="${-mx}" y="${-my}" width="${shot.w + 2 * mx}" height="${shot.h + 2 * my}" fill="#08090b"/><image href="${shot.url}" x="0" y="0" width="${shot.w}" height="${shot.h}"/><g class="ov"></g></svg></div>`;
     const svg = host.querySelector('svg'), toImg = (e) => { const pt = svg.createSVGPoint(); pt.x = e.clientX; pt.y = e.clientY; const m = svg.getScreenCTM(); const q = m ? pt.matrixTransform(m.inverse()) : pt; return [q.x, q.y]; };
-    return { svg, ov: svg.querySelector('.ov'), toImg, lim: [-mx, -my, shot.w + mx, shot.h + my], unit: Math.max(shot.w, shot.h) / 100 };
+    const pxToImg = () => { const m = svg.getScreenCTM(); return m && m.a ? 1 / m.a : 1; }; // image px per CSS px
+    return { svg, ov: svg.querySelector('.ov'), toImg, pxToImg, lim: [-mx, -my, shot.w + mx, shot.h + my], unit: Math.max(shot.w, shot.h) / 100 };
   },
   _fxDefaultCorners(s) { return { cl: [s.w * 0.06, s.h * 0.08], cr: [s.w * 0.94, s.h * 0.08], fr: [s.w * 0.94, s.h * 0.86], fl: [s.w * 0.06, s.h * 0.86] }; },
 
@@ -255,7 +262,11 @@ export const FurnishMixin = {
     };
     draw();
     let drag = null;
-    st.svg.addEventListener('pointerdown', (e) => { const g = e.target.closest('[data-h]'); if (!g) return; drag = g.dataset.h; try { st.svg.setPointerCapture(e.pointerId); } catch (err) { /* ignore */ } e.preventDefault(); });
+    st.svg.addEventListener('pointerdown', (e) => {
+      const g = e.target.closest('[data-h]'); let k = g && g.dataset.h;
+      if (!k) { const p = st.toImg(e), reach = 28 * st.pxToImg(); let bd2 = Infinity; HANDLES.forEach(([h]) => { const d = Math.hypot(s.corners[h][0] - p[0], s.corners[h][1] - p[1]); if (d < reach && d < bd2) { bd2 = d; k = h; } }); }
+      if (!k) return; drag = k; try { st.svg.setPointerCapture(e.pointerId); } catch (err) { /* ignore */ } e.preventDefault();
+    });
     st.svg.addEventListener('pointermove', (e) => { if (!drag) return; const p = st.toImg(e); s.corners[drag] = [clamp(p[0], st.lim[0], st.lim[2]), clamp(p[1], st.lim[1], st.lim[3])]; draw(); });
     const up = () => { drag = null; }; st.svg.addEventListener('pointerup', up); st.svg.addEventListener('pointercancel', up);
     bd.querySelector('[data-top]').addEventListener('change', (e) => { const v = parseFloat(e.target.value); if (v > 0) s.top = v; });
@@ -275,7 +286,7 @@ export const FurnishMixin = {
   /* step 3: review boxes on each photo */
   _fxReview(bd, ft, room) {
     const fx = this._fx, s = fx.shots[fx.cur], fr = wallFrame(room.poly, s.edge);
-    if (!s.wallColour) s.wallColour = '#e9e4da';
+    const curWall = (room.edgeColors && room.edgeColors[s.edge]) || room.wallColor || '#e9e4da', curFloor = { oak: 'wood', pine: 'wood', walnut: 'wood', grey_wood: 'wood', tile_light: 'tile', tile_slate: 'tile' }[room.floor] || (String(room.floor).startsWith('carpet') ? 'carpet' : 'wood');
     const links = new Map(); fx.shots.forEach((x, si) => x.items.forEach((it) => { if (it.link) { if (!links.has(it.link)) links.set(it.link, []); links.get(it.link).push(si + 1); } }));
     const sel = s.items.find((it) => it.key === fx.sel);
     bd.innerHTML = `<div class="tabs">${fx.shots.map((x, k) => `<button class="btn ${k === fx.cur ? 'on' : ''}" data-tab="${k}">${k + 1}. ${esc(wallFrame(room.poly, x.edge).compass)} (${x.items.filter((i) => i.keep).length})</button>`).join('')}</div>
@@ -290,13 +301,14 @@ export const FurnishMixin = {
             <span>Same object as</span><input type="text" data-e="link" placeholder="link id, e.g. obj-3" value="${esc(sel.link || '')}">
             <span></span><button class="btn dan" data-del>Delete box</button></div>` : '<div class="hint">Tap an item to edit it.</div>'}
           <h4 style="margin:12px 0 4px">Colours</h4>
-          <div class="sws"><span>Wall</span><input type="color" data-wc value="${esc(s.wallColour)}"><button class="btn" data-pick="wall">Pick</button><label><input type="checkbox" data-aw ${fx.applyWalls ? 'checked' : ''}> apply</label></div>
-          <div class="sws" style="margin-top:6px"><span>Floor</span><select data-ft>${['wood', 'carpet', 'tile'].map((t) => `<option ${fx.floor && fx.floor.type === t ? 'selected' : ''}>${t}</option>`).join('')}</select><input type="color" data-fc value="${esc((fx.floor && fx.floor.colour) || '#c9974f')}"><button class="btn" data-pick="floor">Pick</button><label><input type="checkbox" data-af ${fx.applyFloor ? 'checked' : ''}> apply</label></div>
+          <div class="sws"><span>Wall</span><input type="color" data-wc value="${esc(s.wallColour || curWall)}">${s.wallColour ? '' : '<small>(unchanged)</small>'}<button class="btn" data-pick="wall">Pick</button><label><input type="checkbox" data-aw ${fx.applyWalls ? 'checked' : ''}> apply</label></div>
+          <div class="sws" style="margin-top:6px"><span>Floor</span><select data-ft>${['wood', 'carpet', 'tile'].map((t) => `<option ${((fx.floor && fx.floor.type) || curFloor) === t ? 'selected' : ''}>${t}</option>`).join('')}</select><input type="color" data-fc value="${esc((fx.floor && fx.floor.colour) || room.floorColor || '#c9974f')}"><button class="btn" data-pick="floor">Pick</button><label><input type="checkbox" data-af ${fx.applyFloor ? 'checked' : ''}> apply</label></div>
           <div class="hint">Colours picked from night photos come out warm – check them.</div>
         </div></div>`;
     const st = this._fxStage(bd.querySelector('[data-stage]'), s), u = st.unit;
+    const g = Math.max(u * 2.8, 22 * st.pxToImg()); // resize grip: at least ~22 CSS px
     const draw = () => {
-      st.ov.innerHTML = s.items.map((it) => { const [x0, y0, x1, y1] = it.bbox; return `<g data-b="${it.key}"><rect class="bx ${it.keep ? '' : 'off'} ${it.key === fx.sel ? 'sel' : ''}" x="${x0}" y="${y0}" width="${Math.max(1, x1 - x0)}" height="${Math.max(1, y1 - y0)}" stroke-width="${u * 0.35}"/>${it.keep ? `<text x="${x0 + u}" y="${y0 + u * 3}" style="font-size:${u * 2.2}px">${esc(it.label)}</text>` : ''}${it.key === fx.sel ? `<rect class="rz" data-rz="${it.key}" x="${x1 - u * 1.4}" y="${y1 - u * 1.4}" width="${u * 2.8}" height="${u * 2.8}"/>` : ''}</g>`; }).join('');
+      st.ov.innerHTML = s.items.map((it) => { const [x0, y0, x1, y1] = it.bbox; return `<g data-b="${it.key}"><rect class="bx ${it.keep ? '' : 'off'} ${it.key === fx.sel ? 'sel' : ''}" x="${x0}" y="${y0}" width="${Math.max(1, x1 - x0)}" height="${Math.max(1, y1 - y0)}" stroke-width="${u * 0.35}"/>${it.keep ? `<text x="${x0 + u}" y="${y0 + u * 3}" style="font-size:${u * 2.2}px">${esc(it.label)}</text>` : ''}${it.key === fx.sel ? `<rect class="rz" data-rz="${it.key}" x="${x1 - g * 0.5}" y="${y1 - g * 0.5}" width="${g}" height="${g}"/>` : ''}</g>`; }).join('');
     };
     draw();
     let act = null;
@@ -338,7 +350,7 @@ export const FurnishMixin = {
     }
     bd.querySelector('[data-wc]').addEventListener('input', (e) => { s.wallColour = e.target.value; });
     bd.querySelector('[data-fc]').addEventListener('input', (e) => { fx.floor = Object.assign(fx.floor || { type: 'wood' }, { colour: e.target.value }); });
-    bd.querySelector('[data-ft]').addEventListener('change', (e) => { fx.floor = Object.assign(fx.floor || {}, { type: e.target.value }); });
+    bd.querySelector('[data-ft]').addEventListener('change', (e) => { fx.floor = Object.assign(fx.floor || { colour: null }, { type: e.target.value }); });
     bd.querySelector('[data-aw]').addEventListener('change', (e) => { fx.applyWalls = e.target.checked; });
     bd.querySelector('[data-af]').addEventListener('change', (e) => { fx.applyFloor = e.target.checked; });
     const n = fx.shots.reduce((k, x) => k + x.items.filter((i) => i.keep).length, 0), old = (this._layout.furniture || []).filter((f) => f.source === 'photo' && (this._roomAt(f.x, f.y) || f.room) === room.id).length;
@@ -366,7 +378,7 @@ export const FurnishMixin = {
     }
     L.furniture.push(...furn);
     if (fx.applyWalls) fx.shots.forEach((s) => { if (s.wallColour) room.edgeColors[s.edge] = s.wallColour; });
-    if (fx.applyFloor && fx.floor) { room.floor = FLOOR_KEY[fx.floor.type] || 'oak'; if (fx.floor.colour) room.floorColor = fx.floor.colour; }
+    if (fx.applyFloor && fx.floor && fx.floor.type) { const k = FLOOR_KEY[fx.floor.type] || 'oak', same = { wood: ['oak', 'pine', 'walnut', 'grey_wood'], carpet: ['carpet_beige', 'carpet_grey', 'carpet_blue', 'carpet_green'], tile: ['tile_light', 'tile_slate'] }[fx.floor.type] || []; if (!same.includes(room.floor)) room.floor = k; if (fx.floor.colour) room.floorColor = fx.floor.colour; }
     L.ceiling = fx.ceiling;
     this._touch(); this._buildRooms(); this._updateLighting(); this._closeFurnish(); this._select({ type: 'room', id: room.id });
     this._toast(`Placed ${furn.length} items – drag to fine-tune, then 💾 Save`);

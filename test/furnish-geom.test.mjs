@@ -129,6 +129,20 @@ test('end to end on a synthetic room: positions within a few cm', () => {
   const mt = merged.find((m) => m.type === 'tv'); near(mt.x, 2.115, 0.02); near(mt.y, 0.03, 0.02); assert.equal(mt.mount, 'wall');
 });
 
+test('wall items stay on east and south walls; reused object ids do not merge different things', () => {
+  const W = 1232, H = 924;
+  const mk = (edge, items) => { const fr = wallFrame(ROOM, edge), cam = calibrate({ fl: [100, 800], fr: [1130, 800], cl: [100, 100], cr: [1130, 100] }, W, H, fr.len, 2.4); return { fr, items, placements: placePhotoItems(items, cam, fr, 2.4), ceiling: 2.4 }; };
+  const pic = (key, link) => ({ key, type: 'picture', place: 'wall', bbox: [560, 300, 660, 380], w_m: 0.4, d_m: 0.03, h_m: 0.3, keep: true, confidence: 0.9, link });
+  const east = mergeShots([mk(1, [pic('e', null)])], { id: 'r', poly: ROOM })[0]; near(east.x, 4.9 - 0.015, 0.01, 'east wall x');
+  const south = mergeShots([mk(2, [pic('s', null)])], { id: 'r', poly: ROOM })[0]; near(south.y, 4.1 - 0.015, 0.01, 'south wall y');
+  const sofaN = { key: 'a', type: 'sofa', place: 'back', bbox: [300, 600, 900, 800], w_m: 2, d_m: 0.9, h_m: 0.85, keep: true, confidence: 0.9, link: 'obj-1' };
+  const unitW = { key: 'b', type: 'tv_unit', place: 'back', bbox: [300, 650, 900, 800], w_m: 1.5, d_m: 0.4, h_m: 0.5, keep: true, confidence: 0.9, link: 'obj-1' };
+  const sofaW = Object.assign({}, sofaN, { key: 'c' });
+  assert.equal(mergeShots([mk(0, [sofaN]), mk(3, [unitW])], { id: 'r', poly: ROOM }).length, 2, 'different types keep their own place');
+  assert.equal(mergeShots([mk(0, [sofaN]), mk(2, [sofaW])], { id: 'r', poly: ROOM }).length, 2, 'same type, far apart: two sofas');
+  assert.equal(normType('constructor'), 'other'); assert.equal(normType('__proto__'), 'other');
+});
+
 test('keepInside and prompt', () => {
   const q = keepInside(-1, 2, ROOM, 0.1); assert.ok(q[0] > 0.09 && q[0] < 4.9);
   const p = buildPrompt({ name: 'Living', w: 4.9, d: 4.1 }, [{ compass: 'north', len: 4.9, w: 1568, h: 724 }], 2.4);

@@ -5,7 +5,7 @@ import json, math, os
 from PIL import Image, ImageDraw
 
 OUT = os.path.join(os.path.dirname(__file__), 'synthetic')
-W, H, CEIL = 1568, 1176, 2.4
+W, H, CEIL = 1232, 924, 2.4
 
 def cam(C, target, f):
     def norm(v): l = math.sqrt(sum(x * x for x in v)); return [x / l for x in v]
@@ -49,7 +49,7 @@ def render(name, L, P, items, wall_col, floor_col):
 
 os.makedirs(OUT, exist_ok=True)
 # north wall (edge 0, 5.5 m): left end = west corner
-Pn = cam([2.6, 1.55, 4.2], [2.9, 1.0, 0], 1150)
+Pn = cam([2.6, 1.55, 4.2], [2.9, 1.0, 0], 905)
 north = [
     dict(type='window', label='window', mount='wall', u0=0.8, u1=1.8, y0=0.9, y1=2.1, z0=0, z1=0.06, rgb=(80, 110, 135)),
     dict(type='picture', label='small picture', mount='wall', u0=4.3, u1=4.7, y0=1.5, y1=1.85, z0=0, z1=0.03, rgb=(150, 60, 50)),
@@ -60,7 +60,7 @@ north = [
 ]
 rn, cn = render('north', 5.5, Pn, north, (232, 226, 210), (170, 120, 70))
 # west wall (edge 3, 4.5 m): left end = south corner; the floor lamp stands in the north-west corner (u ~ 4.0-4.45 here)
-Pw = cam([2.1, 1.5, 4.6], [2.3, 1.0, 0], 1100)
+Pw = cam([2.1, 1.5, 4.6], [2.3, 1.0, 0], 865)
 west = [
     dict(type='chimney_breast', label='blue chimney breast', mount='wall', u0=1.6, u1=3.1, y0=0, y1=2.4, z0=0, z1=0.4, rgb=(45, 75, 150)),
     dict(type='fireplace', label='pine fireplace', mount='floor', u0=1.75, u1=2.95, y0=0, y1=1.1, z0=0.4, z1=0.65, rgb=(176, 122, 69)),

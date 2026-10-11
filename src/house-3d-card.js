@@ -4,6 +4,9 @@
  * Bundled with three.js (MIT, https://threejs.org)
  */
 import * as THREE from 'three';
+import { CATALOGUE, TYPES, wallFrame, wallRotation } from './furnish-geom.js';
+import { buildFurniture } from './furniture3d.js';
+import { FurnishMixin, FURNISH_STYLE } from './furnish-ui.js';
 const VERSION = __VERSION__;
 
 /* ---------- default plan (metres; x = east, y = south; measured from the floorplan at ~60 px/m) ---------- */
@@ -124,15 +127,16 @@ function makeGlowCanvas() {
 
 /* ---------- shaders: per-room lighting so light never bleeds through walls ---------- */
 const VERT = `
-varying vec3 vW; varying vec3 vN; varying vec2 vUv;
-void main(){ vec4 wp = modelMatrix * vec4(position,1.0); vW = wp.xyz; vN = normalize(mat3(modelMatrix) * normal); vUv = uv; gl_Position = projectionMatrix * viewMatrix * wp; }`;
+attribute vec3 vcol; uniform float useV;
+varying vec3 vW; varying vec3 vN; varying vec2 vUv; varying vec3 vC;
+void main(){ vec4 wp = modelMatrix * vec4(position,1.0); vW = wp.xyz; vN = normalize(mat3(modelMatrix) * normal); vUv = uv; vC = useV > 0.5 ? vcol : vec3(1.0); gl_Position = projectionMatrix * viewMatrix * wp; }`;
 const FRAG = `
 #define MAXL ${MAXL}
-uniform sampler2D map; uniform float useMap; uniform vec3 tint; uniform float ambient; uniform float uvScale; uniform float sel;
+uniform sampler2D map; uniform float useMap; uniform vec3 tint; uniform float ambient; uniform float uvScale; uniform float sel; uniform vec3 glow;
 uniform int nL; uniform vec3 lPos[MAXL]; uniform vec3 lCol[MAXL]; uniform float lRad[MAXL];
-varying vec3 vW; varying vec3 vN; varying vec2 vUv;
+varying vec3 vW; varying vec3 vN; varying vec2 vUv; varying vec3 vC;
 void main(){
-  vec3 base = tint; if (useMap > 0.5) base *= texture2D(map, vUv * uvScale).rgb;
+  vec3 base = tint * vC; if (useMap > 0.5) base *= texture2D(map, vUv * uvScale).rgb;
   vec3 N = normalize(vN);
   float shade = 0.82 + 0.18 * dot(N, normalize(vec3(0.35, 1.0, 0.45)));
   vec3 light = vec3(ambient * shade);
@@ -143,6 +147,7 @@ void main(){
     float nd = max(dot(N, L / d), 0.0);
     light += lCol[i] * a * (0.3 + 0.7 * nd);
   }
+  light += glow;
   vec3 c = min(base * light, vec3(1.0));
   c = mix(c, vec3(0.25, 0.65, 1.0), sel * 0.28);
   gl_FragColor = vec4(c, 1.0);
@@ -191,6 +196,9 @@ canvas{position:absolute;inset:0;width:100%;height:100%;touch-action:none;outlin
 .toast{position:absolute;left:50%;top:12px;transform:translateX(-50%);background:rgba(0,0,0,.8);padding:6px 12px;border-radius:16px;font-size:12px;z-index:7;display:none}
 .msg{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;opacity:.7;font-size:14px;text-align:center;padding:20px}
 @media (max-width:600px){.panel{top:auto;left:8px;right:8px;width:auto;height:44%;}.wrap.editing .stage{right:0;bottom:46%}}
+.panel .walls{display:grid;grid-template-columns:1fr 46px 26px;gap:4px 6px;align-items:center;margin-top:4px}.panel .walls input[type=color]{height:24px}
+.panel .walls .x{background:none;border:none;color:#e8eaed;opacity:.6;cursor:pointer;padding:0}
+.dlg .cat{display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:6px;overflow:auto;max-height:55vh}
 `;
 
 class House3DCard extends HTMLElement {
@@ -220,11 +228,11 @@ class House3DCard extends HTMLElement {
   _buildDom() {
     if (this._dom) return;
     const root = this.shadowRoot;
-    root.innerHTML = `<style>${STYLE}</style>
+    root.innerHTML = `<style>${STYLE}${FURNISH_STYLE}</style>
       <div class="wrap"><div class="msg">Loading 3D house…</div><div class="stage"><div class="ovl"></div></div>
-      <div class="tb"></div><div class="panel"></div><div class="pop"></div><div class="drawbar"></div><div class="dlg"><div class="box"></div></div><div class="toast"></div></div>`;
+      <div class="tb"></div><div class="panel"></div><div class="pop"></div><div class="drawbar"></div><div class="dlg"><div class="box"></div></div><div class="fx"></div><div class="toast"></div></div>`;
     const q = (s) => root.querySelector(s);
-    this._dom = { wrap: q('.wrap'), stage: q('.stage'), msg: q('.msg'), ovl: q('.ovl'), tb: q('.tb'), panel: q('.panel'), pop: q('.pop'), drawbar: q('.drawbar'), dlg: q('.dlg'), dlgBox: q('.dlg .box'), toast: q('.toast') };
+    this._dom = { wrap: q('.wrap'), stage: q('.stage'), msg: q('.msg'), ovl: q('.ovl'), tb: q('.tb'), panel: q('.panel'), pop: q('.pop'), drawbar: q('.drawbar'), dlg: q('.dlg'), dlgBox: q('.dlg .box'), fx: q('.fx'), toast: q('.toast') };
     this._dom.wrap.style.setProperty('--bh3d-h', this._config.height);
     this._dom.wrap.style.setProperty('--bh3d-bg', this._config.background);
   }
@@ -255,6 +263,7 @@ class House3DCard extends HTMLElement {
       this._renderer.dispose(); try { this._renderer.forceContextLoss(); } catch (e) { /* ignore */ }
       this._renderer.domElement.remove(); this._renderer = null;
     }
+    this._furn = null; if (this._furnishCleanup) this._furnishCleanup();
     this._markers.forEach((m) => m.labelEl && m.labelEl.remove());
     this._markers.clear(); this._rooms.clear(); this._states = {}; this._tex = null;
   }
@@ -272,6 +281,15 @@ class House3DCard extends HTMLElement {
     l.rooms = (l.rooms || []).filter((r) => r && Array.isArray(r.poly) && r.poly.length >= 3);
     l.rooms.forEach((r, i) => { r.id = r.id || 'room' + i; r.name = r.name || r.id; r.floor = FLOORS[r.floor] ? r.floor : 'oak'; r.open = r.open || []; r.link = r.link || []; r.areas = r.areas || ''; });
     l.doors = l.doors || []; l.markers = (l.markers || []).filter((m) => m && m.entity);
+    l.rooms.forEach((r) => { if (!r.edgeColors || typeof r.edgeColors !== 'object') r.edgeColors = {}; });
+    l.furniture = (Array.isArray(l.furniture) ? l.furniture : []).filter((f) => f && typeof f.x === 'number' && typeof f.y === 'number');
+    l.furniture.forEach((f, i) => {
+      f.type = Object.prototype.hasOwnProperty.call(CATALOGUE, f.type) ? f.type : 'other'; const c = CATALOGUE[f.type];
+      f.id = f.id || 'f_' + i + '_' + Date.now().toString(36); f.label = f.label || c.label;
+      ['w', 'd', 'h'].forEach((k) => { if (!(f[k] > 0)) f[k] = c[k]; }); f.elev = f.elev > 0 ? f.elev : (c.place === 'wall' && f.elev == null ? c.elev || 0 : 0);
+      f.rot = typeof f.rot === 'number' ? f.rot : 0; f.colour = f.colour || c.colour; f.mount = f.mount === 'wall' || f.mount === 'floor' ? f.mount : (c.place === 'wall' ? 'wall' : 'floor');
+    });
+    l.ceiling = l.ceiling > 0 ? l.ceiling : 2.4;
     if (l.plan && typeof l.plan === 'object') { l.plan = Object.assign({ url: '', width: 10, x: 0, y: 0, rotation: 0, opacity: 0.85, always: false }, l.plan); if (!l.plan.url) l.plan = null; } else l.plan = null;
     l.markers.forEach((m) => {
       m.kind = m.kind || this._kindFor(m.entity);
@@ -302,8 +320,8 @@ class House3DCard extends HTMLElement {
     this._renderer.setClearColor(0x000000, 0);
     const cv = this._renderer.domElement; this._dom.stage.insertBefore(cv, this._dom.ovl);
     this._scene = new T.Scene(); this._camera = new T.PerspectiveCamera(38, 1, 0.1, 400);
-    this._gRooms = new T.Group(); this._gMarkers = new T.Group(); this._gHandles = new T.Group(); this._gDraw = new T.Group();
-    this._scene.add(this._gRooms, this._gMarkers, this._gHandles, this._gDraw);
+    this._gRooms = new T.Group(); this._gMarkers = new T.Group(); this._gHandles = new T.Group(); this._gDraw = new T.Group(); this._gFurn = new T.Group();
+    this._scene.add(this._gRooms, this._gFurn, this._gMarkers, this._gHandles, this._gDraw);
     this._ray = new T.Raycaster(); this._uAmbient = { value: 0.6 };
     this._tex = {};
     Object.keys(PATTERN_SIZE).forEach((p) => { const t = new T.CanvasTexture(makePatternCanvas(p)); t.wrapS = t.wrapT = T.RepeatWrapping; t.anisotropy = 4; this._tex[p] = t; });
@@ -347,6 +365,7 @@ class House3DCard extends HTMLElement {
     const k = clamp(v.radius / 16, 1, 2.4) * this._config.marker_scale;
     this._markers.forEach((m) => m.head.scale.setScalar(k));
     this._gHandles.children.forEach((hd) => hd.scale.setScalar(clamp(v.radius / 18, 1, 2.5)));
+    this._gFurn.children.forEach((g) => { const n = g.userData.normal; if (n) g.visible = (c.position.x - g.position.x) * n[0] + (c.position.z - g.position.z) * n[1] > 0; });
     this._renderer.render(this._scene, c);
     this._placeLabels();
   }
@@ -369,7 +388,7 @@ class House3DCard extends HTMLElement {
       vertexShader: VERT, fragmentShader: FRAG, side: T.FrontSide,
       uniforms: Object.assign({
         map: { value: useMap ? this._tex[pattern] : this._tex.plain }, useMap: { value: useMap ? 1 : 0 }, tint: { value: new T.Vector3(...hexToRgb(tintHex)) },
-        ambient: this._uAmbient, uvScale: { value: useMap ? 1 / PATTERN_SIZE[pattern] : 1 }, sel: { value: 0 },
+        ambient: this._uAmbient, uvScale: { value: useMap ? 1 / PATTERN_SIZE[pattern] : 1 }, sel: { value: 0 }, glow: { value: new T.Vector3() }, useV: { value: 0 },
       }, lights),
     });
   }
@@ -377,7 +396,7 @@ class House3DCard extends HTMLElement {
     const T = THREE, mk = () => Array.from({ length: MAXL }, () => new T.Vector3());
     return { nL: { value: 0 }, lPos: { value: mk() }, lCol: { value: mk() }, lRad: { value: new Array(MAXL).fill(1) } };
   }
-  _buildRooms() {
+  _buildRooms(skipFurn) {
     const T = THREE, L = this._layout, H = L.wallHeight;
     this._gRooms.traverse((o) => { if (o.geometry) o.geometry.dispose(); if (o.material && o.material.dispose) o.material.dispose(); });
     this._gRooms.clear(); this._rooms.clear();
@@ -397,14 +416,15 @@ class House3DCard extends HTMLElement {
       const fm = this._roomMaterial(room.floorColor || fl.color, fl.pattern, lights); fm.side = T.DoubleSide;
       const floor = new T.Mesh(fg, fm); floor.userData.room = room.id;
       // walls
-      const wp = [], wn = [], wu = [], wi = [];
+      const wp = [], wn = [], wu = [], wi = [], wc = []; let ec = [1, 1, 1];
       const quad = (ax, ay, bx, by, y0, y1, nx, ny) => {
         const s = wp.length / 3; wp.push(ax, y0, ay, bx, y0, by, bx, y1, by, ax, y1, ay);
-        for (let k = 0; k < 4; k++) wn.push(nx, 0, ny); wu.push(0, y0, 1, y0, 1, y1, 0, y1); wi.push(s, s + 1, s + 2, s, s + 2, s + 3);
+        for (let k = 0; k < 4; k++) { wn.push(nx, 0, ny); wc.push(ec[0], ec[1], ec[2]); } wu.push(0, y0, 1, y0, 1, y1, 0, y1); wi.push(s, s + 1, s + 2, s, s + 2, s + 3);
       };
       const n = room.poly.length;
       for (let i = 0; i < n; i++) {
         if (room.open.includes(i)) continue;
+        ec = hexToRgb((room.edgeColors && room.edgeColors[i]) || room.wallColor || DEFAULT_WALL);
         let a = room.poly[i], c = room.poly[(i + 1) % n];
         let dx = c[0] - a[0], dy = c[1] - a[1]; const len = Math.hypot(dx, dy); if (len < 0.01) continue;
         let nx = -dy / len, ny = dx / len; const mx = (a[0] + c[0]) / 2, my = (a[1] + c[1]) / 2;
@@ -423,12 +443,13 @@ class House3DCard extends HTMLElement {
         });
         if (cur < len - 0.01) { const p0 = P(cur), p1 = P(len); quad(p0[0], p0[1], p1[0], p1[1], 0, H, nx, ny); }
       }
-      const wg = new T.BufferGeometry(); wg.setAttribute('position', new T.Float32BufferAttribute(wp, 3)); wg.setAttribute('normal', new T.Float32BufferAttribute(wn, 3)); wg.setAttribute('uv', new T.Float32BufferAttribute(wu, 2)); wg.setIndex(wi);
-      const wm = this._roomMaterial(room.wallColor || DEFAULT_WALL, 'none', lights);
+      const wg = new T.BufferGeometry(); wg.setAttribute('position', new T.Float32BufferAttribute(wp, 3)); wg.setAttribute('normal', new T.Float32BufferAttribute(wn, 3)); wg.setAttribute('uv', new T.Float32BufferAttribute(wu, 2)); wg.setAttribute('vcol', new T.Float32BufferAttribute(wc, 3)); wg.setIndex(wi);
+      const wm = this._roomMaterial('#ffffff', 'none', lights); wm.uniforms.useV.value = 1;
       const wall = new T.Mesh(wg, wm);
       this._gRooms.add(floor, wall);
       this._rooms.set(room.id, { room, floor, wall, lights });
     });
+    if (skipFurn) this._furnStale = true; else { this._furnStale = false; this._buildFurniture(); }
     this._applySelection(); this._buildHandles(); this._buildPlanImage();
   }
   _buildPlanImage() {
@@ -447,6 +468,59 @@ class House3DCard extends HTMLElement {
   }
   _updatePlanVisibility() { if (this._planMesh) this._planMesh.visible = !!(this._layout.plan && (this._edit || this._layout.plan.always)); }
   _roomAt(x, y) { const r = this._layout.rooms.find((rr) => pointInPoly(x, y, rr.poly)); return r ? r.id : null; }
+
+  /* ----- furniture ----- */
+  _isAdmin() { return !!(this._hass && this._hass.user && this._hass.user.is_admin); } // fail closed
+  _furnLights(f) { const ro = this._rooms.get(this._roomAt(f.x, f.y) || f.room); return ro ? ro.lights : this._ground.lights; }
+  _makeFurn(f) {
+    const L = this._layout, lights = this._furnLights(f);
+    const g = buildFurniture(f, { wallScale: Math.min(1, L.wallHeight / (L.ceiling || 2.4)), wallHeight: L.wallHeight, makeMat: (col, fl) => { const m = this._roomMaterial(col, 'none', lights); if (fl.lamp) m.side = THREE.DoubleSide; return m; } });
+    this._gFurn.add(g); this._furn.set(f.id, { data: f, group: g });
+    return g;
+  }
+  _dropFurn(id) { const o = this._furn && this._furn.get(id); if (!o) return; this._gFurn.remove(o.group); o.group.traverse((m) => { if (m.material) m.material.dispose(); }); this._furn.delete(id); }
+  _buildFurniture() {
+    if (!this._gFurn || !this._layout) return;
+    (this._furn ? Array.from(this._furn.keys()) : []).forEach((id) => this._dropFurn(id));
+    this._furn = new Map(); this._furnStale = false; (this._layout.furniture || []).forEach((f) => this._makeFurn(f));
+    this._updateLampGlow(); this._applySelection();
+  }
+  _rebuildFurn(f) { this._dropFurn(f.id); this._makeFurn(f); this._updateLampGlow(); this._applySelection(); this._render(); }
+  _updateLampGlow() {
+    if (!this._furn || !this._hass) return;
+    this._furn.forEach((o) => {
+      const e = o.data.entity, s = e && this._hass.states[e]; let rgb = null;
+      if (s && s.state === 'on') { const li = this._lightInfo({ data: { entity: e } }); if (li) rgb = li.rgb.map((v) => v * (0.35 + 0.55 * li.b)); }
+      o.group.traverse((m) => { if (m.userData.lamp && m.material && m.material.uniforms) m.material.uniforms.glow.value.set(rgb ? rgb[0] : 0, rgb ? rgb[1] : 0, rgb ? rgb[2] : 0); });
+    });
+  }
+  // put a furniture item flat against the nearest wall of its room (rotation + position)
+  _snapToWall(f) {
+    const rid = this._roomAt(f.x, f.y) || f.room, room = this._layout.rooms.find((r) => r.id === rid); if (!room) return;
+    let best = null;
+    room.poly.forEach((_, i) => {
+      if (room.open.includes(i)) return; const fr = wallFrame(room.poly, i);
+      const u = (f.x - fr.origin[0]) * fr.right[0] + (f.y - fr.origin[1]) * fr.right[1], dist = (f.x - fr.origin[0]) * fr.normal[0] + (f.y - fr.origin[1]) * fr.normal[1];
+      if (u < -0.2 || u > fr.len + 0.2) return; if (!best || Math.abs(dist) < Math.abs(best.dist)) best = { fr, u, dist };
+    });
+    if (!best) return; const { fr } = best, u = clamp(best.u, Math.min(f.w / 2, fr.len / 2), Math.max(fr.len - f.w / 2, fr.len / 2)), d = f.d / 2 + 0.005;
+    f.x = Math.round((fr.origin[0] + fr.right[0] * u + fr.normal[0] * d) * 100) / 100; f.y = Math.round((fr.origin[1] + fr.right[1] * u + fr.normal[1] * d) * 100) / 100; f.rot = Math.round(wallRotation(fr)); f.room = room.id;
+  }
+  _addFurniture(type, roomId) {
+    const c = CATALOGUE[type], room = this._layout.rooms.find((r) => r.id === roomId);
+    const at = room ? centroid(room.poly) : [this._view.target[0], this._view.target[2]];
+    const f = { id: 'f_' + Date.now().toString(36) + Math.floor(Math.random() * 1e4).toString(36), room: room ? room.id : null, type, label: c.label, x: snap(at[0]), y: snap(at[1]), w: c.w, d: c.d, h: c.h, elev: c.place === 'wall' ? c.elev || 0 : 0, rot: 0, colour: c.colour, mount: c.place === 'wall' ? 'wall' : 'floor', source: 'manual' };
+    if (c.place !== 'free') this._snapToWall(f);
+    this._layout.furniture.push(f); this._makeFurn(f); this._touch(); this._select({ type: 'furn', id: f.id });
+  }
+  _openCatalogue(roomId) {
+    const box = this._dom.dlgBox;
+    box.innerHTML = `<b>Add furniture</b><div class="cat">${TYPES.map((t) => `<button class="btn" data-t="${t}">${esc(CATALOGUE[t].label)}</button>`).join('')}</div><div style="display:flex;justify-content:flex-end"><button class="btn" data-x>Close</button></div>`;
+    box.querySelectorAll('[data-t]').forEach((b) => b.addEventListener('click', () => { this._dom.dlg.classList.remove('show'); this._addFurniture(b.dataset.t, roomId); }));
+    box.querySelector('[data-x]').addEventListener('click', () => this._dom.dlg.classList.remove('show'));
+    this._dom.dlg.classList.add('show');
+  }
+  _pickFurn(e) { const objs = []; if (this._gFurn) this._gFurn.children.forEach((g) => { if (g.visible) objs.push(g); }); this._ray.setFromCamera(this._ndc(e), this._camera); const h = this._ray.intersectObjects(objs, true); return h.length ? h[0].object.userData.furn : null; }
 
   /* ----- markers ----- */
   _buildMarkers() {
@@ -547,6 +621,7 @@ class House3DCard extends HTMLElement {
     this._markers.forEach((m) => { if (this._updateMarker(m, force)) { changed = true; if (m.data.kind === 'light') lights = true; } });
     const sun = this._hass.states['sun.sun']; if (force || sun !== this._sunState) { this._sunState = sun; this._updateAmbient(); changed = true; }
     if (lights) this._updateLighting();
+    if (this._furn && this._furn.size) { let lamp = force || lights; this._furn.forEach((o) => { const e = o.data.entity; if (!e) return; const st = this._hass.states[e]; if (st !== o.state) { o.state = st; lamp = true; } }); if (lamp) { this._updateLampGlow(); changed = true; } }
     if (this._climateOpen) this._renderClimate();
     if (changed) this._render();
   }
@@ -564,6 +639,7 @@ class House3DCard extends HTMLElement {
       if (this._edit) {
         if (this._shape) { const h = this._pick(e, this._gHandles.children); if (h) this._drag = { type: h.object.userData.type, ref: h.object.userData }; }
         if (!this._drag) { const id = this._pickMarker(e); if (id) this._drag = { type: 'marker', id }; }
+        if (!this._drag && !this._drawing && this._sel && this._sel.type === 'furn') { const fid = this._pickFurn(e), o = fid === this._sel.id && this._furn.get(fid); if (o) { const pt = this._planePoint(e, 0); if (pt) this._drag = { type: 'furn', id: fid, off: [o.data.x - pt.x, o.data.y - pt.z] }; } }
       }
       clearTimeout(this._longT);
       this._longT = setTimeout(() => { if (!this._moved && this._pointers.size === 1 && !this._edit) { const id = this._pickMarker(e); if (id) { this._long = true; this._moreInfo(id); } } }, 600);
@@ -591,14 +667,25 @@ class House3DCard extends HTMLElement {
   }
   _onUp(e, cancelled) {
     const had = this._pointers.size; this._pointers.delete(e.pointerId); clearTimeout(this._longT); this._pinch = null;
+    if (this._furnStale && !this._pointers.size) { this._buildFurniture(); this._render(); }
     if (had === 1 && !cancelled) {
-      if (this._drag && this._moved) { if (this._drag.type === 'marker') { const m = this._markers.get(this._drag.id); if (m) { this._poseMarker(m); this._updateLighting(); } } this._dirty = true; this._render(); }
+      if (this._drag && this._moved) {
+        if (this._drag.type === 'marker') { const m = this._markers.get(this._drag.id); if (m) { this._poseMarker(m); this._updateLighting(); } }
+        if (this._drag.type === 'furn') { const o = this._furn.get(this._drag.id); if (o) { if (o.data.mount === 'wall') this._snapToWall(o.data); o.data.room = this._roomAt(o.data.x, o.data.y) || o.data.room; this._rebuildFurn(o.data); this._renderPanel(); } }
+        this._dirty = true; this._render();
+      }
       else if (!this._moved && !this._long) this._tap(e);
     }
     this._drag = null;
   }
   _dragTo(e) {
     const dr = this._drag;
+    if (dr.type === 'furn') {
+      const o = this._furn.get(dr.id); if (!o) return; const pt = this._planePoint(e, 0); if (!pt) return;
+      o.data.x = snap(pt.x + dr.off[0]); o.data.y = snap(pt.z + dr.off[1]); o.group.position.x = o.data.x; o.group.position.z = o.data.y;
+      if (!this._sel || this._sel.id !== dr.id) this._select({ type: 'furn', id: dr.id });
+      return;
+    }
     if (dr.type === 'marker') {
       const m = this._markers.get(dr.id); if (!m) return; const pt = this._planePoint(e, m.data.h); if (!pt) return;
       m.data.x = snap(pt.x); m.data.y = snap(pt.z); this._poseMarker(m); this._updateLighting();
@@ -607,7 +694,7 @@ class House3DCard extends HTMLElement {
       const pt = this._planePoint(e, dr.type === 'vtx' ? this._layout.wallHeight + 0.05 : 1.0); if (!pt) return; const nx = snap(pt.x), ny = snap(pt.z);
       if (dr.type === 'vtx') dr.ref.refs.forEach(([ri, vi]) => { this._layout.rooms[ri].poly[vi] = [nx, ny]; });
       else if (dr.type === 'door') { const d = this._layout.doors[dr.ref.index]; d.x = nx; d.y = ny; }
-      const keep = dr.ref; this._buildRooms(); // handles are rebuilt; keep dragging the same logical handle
+      const keep = dr.ref; this._buildRooms(true); // handles are rebuilt; keep dragging the same logical handle (furniture refreshed on release)
       const again = this._gHandles.children.find((hd) => hd.userData.type === keep.type && (keep.type === 'door' ? hd.userData.index === keep.index : Math.abs(hd.position.x - nx) < 1e-6 && Math.abs(hd.position.z - ny) < 1e-6));
       if (again) dr.ref = again.userData;
       this._markers.forEach((m) => (m.roomId = this._roomAt(m.data.x, m.data.y))); this._updateLighting();
@@ -647,10 +734,17 @@ class House3DCard extends HTMLElement {
     if (this._edit) {
       if (this._shape) { const h = this._pick(e, this._gHandles.children); if (h && h.object.userData.type === 'door') return this._select({ type: 'door', id: h.object.userData.index }); }
       if (id) return this._select({ type: 'marker', id });
+      const fid = this._pickFurn(e);
       const floors = []; this._rooms.forEach((r) => floors.push(r.floor)); const h = this._pick(e, floors);
+      // tapping a piece selects it; tapping it again selects the room under it (rugs and beds cover the floor)
+      if (fid && !(this._sel && this._sel.type === 'furn' && this._sel.id === fid)) return this._select({ type: 'furn', id: fid });
       return this._select(h ? { type: 'room', id: h.object.userData.room } : null);
     }
-    if (!id) { this._closeClimate(); return; }
+    if (!id) {
+      const fid = this._pickFurn(e), o = fid && this._furn.get(fid);
+      if (o && o.data.entity && this._hass.states[o.data.entity]) { this._hass.callService('homeassistant', 'toggle', { entity_id: o.data.entity }); return; }
+      this._closeClimate(); return;
+    }
     const m = this._markers.get(id), s = this._hass.states[id];
     if (m.data.kind === 'climate') return this._openClimate(id);
     if (!s || s.state === 'unavailable') return this._toast(this._name(id) + ' is unavailable');
@@ -710,6 +804,7 @@ class House3DCard extends HTMLElement {
   _applySelection() {
     this._rooms.forEach((r, id) => { r.floor.material.uniforms.sel.value = this._edit && this._sel && this._sel.type === 'room' && this._sel.id === id ? 1 : 0; });
     this._markers.forEach((m) => { const on = this._sel && this._sel.type === 'marker' && this._sel.id === m.data.entity; m.ring.material.color.set(on ? 0xffc107 : 0x29b6f6); if (m.labelEl) m.labelEl.classList.toggle('sel', !!on); });
+    if (this._furn) this._furn.forEach((o, id) => { const on = this._edit && this._sel && this._sel.type === 'furn' && this._sel.id === id ? 1 : 0; o.group.traverse((m) => { if (m.material && m.material.uniforms) m.material.uniforms.sel.value = on; }); });
   }
   _buildHandles() {
     if (!this._gHandles) return; const T = THREE;
@@ -733,6 +828,20 @@ class House3DCard extends HTMLElement {
         ${d.kind === 'light' ? `<label>Light reach: <span data-o="r">${d.r.toFixed(1)}</span> m</label><input type="range" data-f="r" min="1" max="10" step="0.25" value="${d.r}">` : ''}
         <div class="row"><button class="btn" data-a="toggle">Test toggle</button><button class="btn dan" data-a="del">Remove</button></div>
         <div class="row"><button class="btn" data-a="back">← Back</button></div>`;
+    } else if (sel && sel.type === 'furn' && this._furn && this._furn.has(sel.id)) {
+      const f = this._furn.get(sel.id).data, lights = Object.keys(this._hass.states).filter((x) => x.startsWith('light.')).sort();
+      const sl = (k, lab, min, max, step) => `<label>${lab}: <span data-o="${k}">${Number(f[k]).toFixed(2)}</span> m</label><input type="range" data-f="${k}" min="${min}" max="${max}" step="${step}" value="${f[k]}">`;
+      html = `<h3>${esc(f.label)}</h3><div class="hint">${f.source === 'photo' ? 'From photos · ' : ''}drag it on the floor to move${f.mount === 'wall' ? ' (it stays on the wall)' : ''}</div>
+        <label>Type</label><select data-f="type">${TYPES.map((t) => `<option value="${t}">${esc(CATALOGUE[t].label)}</option>`).join('')}</select>
+        <label>Name</label><input type="text" data-f="label" value="${esc(f.label)}">
+        <label>Colour</label><input type="color" data-f="colour" value="${esc(f.colour)}">
+        ${sl('w', 'Width', 0.05, 6, 0.05)}${sl('d', 'Depth', 0.01, 3, 0.01)}${sl('h', 'Height', 0.01, 3, 0.01)}${sl('elev', 'Raised off the floor', 0, 2.4, 0.01)}
+        <label>Rotation: <span data-o="rot">${Math.round(f.rot)}</span>°</label><input type="range" data-f="rot" min="-180" max="180" step="5" value="${f.rot}">
+        <div class="row"><button class="btn" data-a="rl">↺ 90°</button><button class="btn" data-a="rr">↻ 90°</button><button class="btn" data-a="snapw">Against nearest wall</button></div>
+        <label><input type="checkbox" data-f="mount" ${f.mount === 'wall' ? 'checked' : ''}> Hangs on the wall</label>
+        <label>Linked light (glows and toggles on tap)</label><select data-f="entity"><option value="">— none —</option>${lights.map((x) => `<option value="${esc(x)}" ${x === f.entity ? 'selected' : ''}>${esc(this._name(x))}</option>`).join('')}</select>
+        <div class="row"><button class="btn" data-a="dup">Duplicate</button><button class="btn dan" data-a="delf">Delete</button></div>
+        <div class="row"><button class="btn" data-a="back">← Back</button></div>`;
     } else if (sel && sel.type === 'room' && this._rooms.has(sel.id)) {
       const r = this._rooms.get(sel.id).room, fl = FLOORS[r.floor];
       html = `<h3>Room</h3><label>Name</label><input type="text" data-f="name" value="${esc(r.name)}">
@@ -741,7 +850,11 @@ class House3DCard extends HTMLElement {
         <label>Floor colour</label><input type="color" data-f="floorColor" value="${esc(r.floorColor || fl.color)}">
         <label>Wall colour</label><input type="color" data-f="wallColor" value="${esc(r.wallColor || DEFAULT_WALL)}">
         <div class="row"><button class="btn" data-a="wallAll">Use wall colour in all rooms</button></div>
-        <div class="row"><button class="btn" data-a="addhere">➕ Add entity here</button><button class="btn" data-a="back">← Back</button></div>
+        <h4>Individual walls</h4><div class="walls">${r.poly.map((_, i) => r.open.includes(i) ? '' : (() => { const fr = wallFrame(r.poly, i); return `<span>${esc(fr.compass)} · ${fr.len.toFixed(1)} m</span><input type="color" data-edge="${i}" value="${esc(r.edgeColors[i] || r.wallColor || DEFAULT_WALL)}"><button class="x" data-edgex="${i}" title="Same as room">${r.edgeColors[i] ? '✕' : ''}</button>`; })()).join('')}</div>
+        <h4>Furniture</h4><div class="hint">${(L.furniture || []).filter((f) => (this._roomAt(f.x, f.y) || f.room) === r.id).length} items in this room</div>
+        ${this._isAdmin() ? '<div class="row"><button class="btn pri" data-a="furnish">📷 Furnish from photos</button></div>' : ''}
+        <div class="row"><button class="btn" data-a="addfurn">➕ Add furniture</button><button class="btn dan" data-a="clearfurn">Clear</button></div>
+        <h4>Entities</h4><div class="row"><button class="btn" data-a="addhere">➕ Add entity here</button><button class="btn" data-a="back">← Back</button></div>
         ${this._shape ? '<div class="row"><button class="btn dan" data-a="delroom">Delete room</button></div>' : ''}`;
     } else if (sel && sel.type === 'door' && L.doors[sel.id]) {
       const d = L.doors[sel.id];
@@ -777,13 +890,33 @@ class House3DCard extends HTMLElement {
       on('[data-f=r]', 'input', (e) => { d.r = Number(e.target.value); $('[data-o=r]').textContent = d.r.toFixed(1); this._updateLighting(); this._touch(); this._render(); });
       on('[data-a=toggle]', 'click', () => this._hass.callService('homeassistant', 'toggle', { entity_id: d.entity }));
       on('[data-a=del]', 'click', () => { L.markers = L.markers.filter((x) => x !== d); this._removeMarkerObj(d.entity); this._touch(); this._updateLighting(); this._select(null); });
+    } else if (sel && sel.type === 'furn' && this._furn && this._furn.has(sel.id)) {
+      const f = this._furn.get(sel.id).data; $('[data-f=type]').value = f.type;
+      const redo = () => { this._touch(); this._rebuildFurn(f); };
+      on('[data-f=type]', 'change', (e) => { const was = CATALOGUE[f.type], c = CATALOGUE[e.target.value]; f.type = e.target.value; if (!f.label || f.label === was.label) f.label = c.label; f.mount = c.place === 'wall' ? 'wall' : 'floor'; redo(); this._renderPanel(); });
+      on('[data-f=label]', 'change', (e) => { f.label = e.target.value; this._touch(); });
+      on('[data-f=colour]', 'input', (e) => { f.colour = e.target.value; redo(); });
+      ['w', 'd', 'h', 'elev'].forEach((k) => on(`[data-f=${k}]`, 'input', (e) => { f[k] = Number(e.target.value); $(`[data-o=${k}]`).textContent = f[k].toFixed(2); redo(); }));
+      on('[data-f=rot]', 'input', (e) => { f.rot = Number(e.target.value); $('[data-o=rot]').textContent = f.rot; redo(); });
+      const turn = (dr) => { f.rot = ((((f.rot + dr) % 360) + 540) % 360) - 180; redo(); this._renderPanel(); };
+      on('[data-a=rl]', 'click', () => turn(90)); on('[data-a=rr]', 'click', () => turn(-90));
+      on('[data-a=snapw]', 'click', () => { this._snapToWall(f); redo(); this._renderPanel(); });
+      on('[data-f=mount]', 'change', (e) => { f.mount = e.target.checked ? 'wall' : 'floor'; if (f.mount === 'wall') this._snapToWall(f); redo(); this._renderPanel(); });
+      on('[data-f=entity]', 'change', (e) => { if (e.target.value) f.entity = e.target.value; else delete f.entity; this._touch(); this._updateLampGlow(); this._render(); });
+      on('[data-a=dup]', 'click', () => { const c = JSON.parse(JSON.stringify(f)); c.id = 'f_' + Date.now().toString(36); c.x = snap(c.x + 0.3); c.y = snap(c.y + 0.3); L.furniture.push(c); this._makeFurn(c); this._touch(); this._select({ type: 'furn', id: c.id }); });
+      on('[data-a=delf]', 'click', () => { L.furniture = L.furniture.filter((x) => x !== f); this._dropFurn(f.id); this._touch(); this._select(null); });
     } else if (sel && sel.type === 'room' && this._rooms.has(sel.id)) {
       const r = this._rooms.get(sel.id).room; $('[data-f=floor]').value = r.floor;
       on('[data-f=name]', 'change', (e) => { r.name = e.target.value; this._touch(); });
       on('[data-f=areas]', 'change', (e) => { r.areas = e.target.value; this._touch(); });
       on('[data-f=floor]', 'change', (e) => { r.floor = e.target.value; delete r.floorColor; this._touch(); this._buildRooms(); this._updateLighting(); this._select(sel); });
       on('[data-f=floorColor]', 'input', (e) => { r.floorColor = e.target.value; this._rooms.get(r.id).floor.material.uniforms.tint.value.set(...hexToRgb(r.floorColor)); this._touch(); this._render(); });
-      on('[data-f=wallColor]', 'input', (e) => { r.wallColor = e.target.value; this._rooms.get(r.id).wall.material.uniforms.tint.value.set(...hexToRgb(r.wallColor)); this._touch(); this._render(); });
+      on('[data-f=wallColor]', 'change', (e) => { r.wallColor = e.target.value; this._touch(); this._buildRooms(); this._updateLighting(); this._render(); this._renderPanel(); });
+      P.querySelectorAll('[data-edge]').forEach((el) => el.addEventListener('change', (e) => { r.edgeColors[el.dataset.edge] = e.target.value; this._touch(); this._buildRooms(); this._updateLighting(); this._render(); this._renderPanel(); }));
+      P.querySelectorAll('[data-edgex]').forEach((el) => el.addEventListener('click', () => { delete r.edgeColors[el.dataset.edgex]; this._touch(); this._buildRooms(); this._updateLighting(); this._render(); this._renderPanel(); }));
+      on('[data-a=furnish]', 'click', () => this._openFurnish(r.id));
+      on('[data-a=addfurn]', 'click', () => this._openCatalogue(r.id));
+      on('[data-a=clearfurn]', 'click', () => { const mine = (f) => (this._roomAt(f.x, f.y) || f.room) === r.id; const n = L.furniture.filter(mine).length; if (!n || !confirm(`Remove all ${n} furniture items from ${r.name}?`)) return; L.furniture.filter(mine).forEach((f) => this._dropFurn(f.id)); L.furniture = L.furniture.filter((f) => !mine(f)); this._touch(); this._renderPanel(); this._render(); });
       on('[data-a=wallAll]', 'click', () => { const c = r.wallColor || DEFAULT_WALL; L.rooms.forEach((x) => (x.wallColor = c)); this._touch(); this._buildRooms(); this._updateLighting(); this._render(); });
       on('[data-a=addhere]', 'click', () => this._openPicker(r.id));
       on('[data-a=delroom]', 'click', () => { if (!confirm('Delete room "' + r.name + '"?')) return; L.rooms = L.rooms.filter((x) => x !== r); this._touch(); this._buildRooms(); this._markers.forEach((m) => this._poseMarker(m)); this._updateLighting(); this._select(null); });
@@ -868,16 +1001,18 @@ class House3DCard extends HTMLElement {
   }
   _openIO() {
     const box = this._dom.dlgBox;
-    box.innerHTML = `<b>Export / import layout (JSON)</b><div class="hint">Select all + copy to back it up. Paste a saved layout and press Import to restore.</div><textarea spellcheck="false"></textarea><label style="font-size:12px"><input type="checkbox" data-keep checked> Keep my placed entities (import rooms, doors, colours and plan image only)</label><div style="display:flex;gap:6px;justify-content:flex-end"><button class="btn" data-i>Import</button><button class="btn" data-x>Close</button></div>`;
+    box.innerHTML = `<b>Export / import layout (JSON)</b><div class="hint">Select all + copy to back it up. Paste a saved layout and press Import to restore.</div><textarea spellcheck="false"></textarea><label style="font-size:12px"><input type="checkbox" data-keep checked> Keep my placed entities (import rooms, doors, colours and plan image only)</label><label style="font-size:12px"><input type="checkbox" data-keepf checked> Keep my furniture</label><div style="display:flex;gap:6px;justify-content:flex-end"><button class="btn" data-i>Import</button><button class="btn" data-x>Close</button></div>`;
     const ta = box.querySelector('textarea'); ta.value = JSON.stringify(this._layout);
     box.querySelector('[data-x]').addEventListener('click', () => this._dom.dlg.classList.remove('show'));
     box.querySelector('[data-i]').addEventListener('click', () => {
-      try { const v = JSON.parse(ta.value); if (!v || !Array.isArray(v.rooms)) throw new Error('no rooms[] in JSON'); const keep = box.querySelector('[data-keep]').checked && this._layout.markers.length; if (keep) v.markers = this._layout.markers; this._layout = this._normalise(v); this._touch(); this._buildRooms(); this._buildMarkers(); this._syncStates(true); this._dom.dlg.classList.remove('show'); this._select(null); this._toast('Imported – press Save to keep it'); }
+      try { const v = JSON.parse(ta.value); if (!v || !Array.isArray(v.rooms)) throw new Error('no rooms[] in JSON'); const keep = box.querySelector('[data-keep]').checked && this._layout.markers.length; if (keep) v.markers = this._layout.markers; if (box.querySelector('[data-keepf]').checked && this._layout.furniture.length) v.furniture = this._layout.furniture; this._layout = this._normalise(v); this._touch(); this._buildRooms(); this._buildMarkers(); this._syncStates(true); this._dom.dlg.classList.remove('show'); this._select(null); this._toast('Imported – press Save to keep it'); }
       catch (e) { this._toast('Import failed: ' + e.message); }
     });
     this._dom.dlg.classList.add('show');
   }
 }
+
+Object.assign(House3DCard.prototype, FurnishMixin);
 
 if (!customElements.get('house-3d-card')) {
   customElements.define('house-3d-card', House3DCard);

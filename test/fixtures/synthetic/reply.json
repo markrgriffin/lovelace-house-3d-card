@@ -1,0 +1,200 @@
+{
+ "floor": {
+  "type": "wood",
+  "colour": "#aa7846"
+ },
+ "photos": [
+  {
+   "photo": 1,
+   "wall_colour": "#e8e2d2",
+   "items": [
+    {
+     "object_id": null,
+     "type": "window",
+     "label": "window",
+     "mount": "wall",
+     "bbox": [
+      130,
+      215,
+      379,
+      490
+     ],
+     "width_m": 1.0,
+     "depth_m": 0.06,
+     "height_m": 1.2,
+     "colour": "#506e87",
+     "partial": false,
+     "confidence": 0.9
+    },
+    {
+     "object_id": null,
+     "type": "picture",
+     "label": "small picture",
+     "mount": "wall",
+     "bbox": [
+      911,
+      279,
+      1000,
+      355
+     ],
+     "width_m": 0.4,
+     "depth_m": 0.03,
+     "height_m": 0.35,
+     "colour": "#963c32",
+     "partial": false,
+     "confidence": 0.9
+    },
+    {
+     "object_id": null,
+     "type": "tv",
+     "label": "wall TV",
+     "mount": "wall",
+     "bbox": [
+      460,
+      294,
+      733,
+      454
+     ],
+     "width_m": 1.23,
+     "depth_m": 0.06,
+     "height_m": 0.72,
+     "colour": "#141416",
+     "partial": false,
+     "confidence": 0.9
+    },
+    {
+     "object_id": "obj-con",
+     "type": "media_console",
+     "label": "walnut media console",
+     "mount": "floor",
+     "bbox": [
+      312,
+      542,
+      876,
+      712
+     ],
+     "width_m": 2.4,
+     "depth_m": 0.45,
+     "height_m": 0.6,
+     "colour": "#5f3e28",
+     "partial": false,
+     "confidence": 0.9
+    },
+    {
+     "object_id": "obj-lamp",
+     "type": "floor_lamp",
+     "label": "floor lamp",
+     "mount": "floor",
+     "bbox": [
+      0,
+      330,
+      108,
+      738
+     ],
+     "width_m": 0.45,
+     "depth_m": 0.45,
+     "height_m": 1.6,
+     "colour": "#e6d2a0",
+     "partial": true,
+     "confidence": 0.9
+    },
+    {
+     "object_id": null,
+     "type": "armchair",
+     "label": "rust armchair",
+     "mount": "floor",
+     "bbox": [
+      940,
+      541,
+      1232,
+      924
+     ],
+     "width_m": 0.9,
+     "depth_m": 0.85,
+     "height_m": 0.9,
+     "colour": "#96462d",
+     "partial": true,
+     "confidence": 0.9
+    }
+   ]
+  },
+  {
+   "photo": 2,
+   "wall_colour": "#e8e2d2",
+   "items": [
+    {
+     "object_id": null,
+     "type": "chimney_breast",
+     "label": "blue chimney breast",
+     "mount": "wall",
+     "bbox": [
+      470,
+      175,
+      788,
+      671
+     ],
+     "width_m": 1.5,
+     "depth_m": 0.4,
+     "height_m": 2.4,
+     "colour": "#2d4b96",
+     "partial": false,
+     "confidence": 0.9
+    },
+    {
+     "object_id": "obj-lamp",
+     "type": "floor_lamp",
+     "label": "floor lamp",
+     "mount": "floor",
+     "bbox": [
+      914,
+      347,
+      1058,
+      678
+     ],
+     "width_m": 0.45,
+     "depth_m": 0.45,
+     "height_m": 1.6,
+     "colour": "#e6d2a0",
+     "partial": false,
+     "confidence": 0.9
+    },
+    {
+     "object_id": null,
+     "type": "fireplace",
+     "label": "pine fireplace",
+     "mount": "floor",
+     "bbox": [
+      502,
+      450,
+      762,
+      689
+     ],
+     "width_m": 1.2,
+     "depth_m": 0.25,
+     "height_m": 1.1,
+     "colour": "#b07a45",
+     "partial": false,
+     "confidence": 0.9
+    },
+    {
+     "object_id": null,
+     "type": "mirror",
+     "label": "arched mirror",
+     "mount": "wall",
+     "bbox": [
+      546,
+      250,
+      715,
+      420
+     ],
+     "width_m": 0.8,
+     "depth_m": 0.04,
+     "height_m": 0.8,
+     "colour": "#aa784b",
+     "partial": false,
+     "confidence": 0.9
+    }
+   ]
+  }
+ ]
+}

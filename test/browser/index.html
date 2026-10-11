@@ -1,0 +1,37 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>house-3d-card test</title>
+<style>body{margin:0;background:#111;font-family:sans-serif}#host{width:1280px;height:760px}</style></head>
+<body><div id="host"></div>
+<script type="module">
+// Mocked Home Assistant for headless tests: ?admin=0 makes a non-admin user.
+const q = new URLSearchParams(location.search), admin = q.get('admin') !== '0';
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const reply = await (await fetch('../fixtures/synthetic/reply.json')).json();
+window.calls = [];
+const states = {
+  'sun.sun': { state: 'above_horizon', attributes: { elevation: 30 } },
+  'light.living': { entity_id: 'light.living', state: 'on', attributes: { friendly_name: 'Living light', brightness: 200, color_mode: 'color_temp', color_temp_kelvin: 2700, supported_color_modes: ['color_temp'] } },
+  'ai_task.claude_ai_task': { entity_id: 'ai_task.claude_ai_task', state: 'unknown', attributes: { friendly_name: 'Claude AI Task' } },
+};
+const hass = {
+  states, user: { is_admin: admin, name: 'test' }, entities: {}, devices: {}, areas: {},
+  async callWS(m) {
+    window.calls.push({ ws: m.type, domain: m.domain, service: m.service, data: m.service_data });
+    if (m.type === 'frontend/get_system_data' || m.type === 'frontend/get_user_data') return { value: window.savedLayout || null };
+    if (m.type === 'frontend/set_system_data') { window.savedLayout = m.value; return {}; }
+    if (m.type === 'call_service' && m.domain === 'ai_task') { await sleep(400); return { response: { conversation_id: 'x', data: '```json\n' + JSON.stringify(reply) + '\n```' } }; }
+    throw new Error('unexpected ' + m.type);
+  },
+  async callService(d, s, data) { window.calls.push({ svc: d + '.' + s, data }); },
+  async fetchWithAuth(url, opts) {
+    const fd = opts.body, f = fd.get('file');
+    window.calls.push({ upload: url, target: fd.get('media_content_id'), name: f.name, type: f.type, size: f.size });
+    return new Response(JSON.stringify({ media_content_id: fd.get('media_content_id') + '/' + f.name }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+  },
+};
+await import('../../dist/house-3d-card.js');
+const card = document.createElement('house-3d-card');
+card.setConfig({ entities: ['light.living'], ai_task_entity: 'ai_task.claude_ai_task', height: '760px' });
+document.getElementById('host').appendChild(card);
+card.hass = hass; window.card = card; window.hass = hass;
+</script></body></html>

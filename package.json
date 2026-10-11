@@ -1,9 +1,10 @@
 {
   "name": "lovelace-house-3d-card",
-  "version": "1.0.1",
+  "version": "1.1.0",
   "description": "Rotatable 3D house mimic card for Home Assistant",
   "scripts": {
-    "build": "node build.mjs"
+    "build": "node build.mjs",
+    "test": "node --test test/*.test.mjs"
   },
   "keywords": [
     "home-assistant",
